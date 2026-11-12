@@ -236,6 +236,12 @@
     .bc .bc-sub.memo { display: none; }
     .bd-map { flex: 0 0 auto; }
     @container (max-width: 520px) { .bc { grid-template-columns: 50px minmax(0, 1fr) 40px 72px; } .bc-st { font-size: 17px; } }
+    /* v7.43: カードの中は3段 (1段目 名前・2段目 推し・券種・3段目 特典・メモ) */
+    .bc { min-height: 74px; }
+    .bc-l3 { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; overflow: hidden; margin-top: 3px; min-height: 19px; }
+    .bc-l3 .bc-gift { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .bc-l3 .bc-note, .bc-l3 .bc-memo { margin-top: 0; flex-shrink: 1; min-width: 0; }
+    .bc-l2 .bc-oshi { font-size: 12px; } .bc-l2 .bc-oshi b { font-size: 14px; }
 
   </style>
 </head>
@@ -539,8 +545,10 @@
             + '<div class="bc-st' + (x.seats ? (String(x.seats).length > 4 ? ' long' : '') : ' free') + '">' + (x.seats ? escapeHtml(x.seats) : '自由席') + '</div>'
             + '<div class="bc-main">'
             +   '<div class="bc-l1"><span class="bc-name">' + escapeHtml(x.name || '') + '</span><span class="bc-kana">' + escapeHtml(x.kana || '') + '</span>' + sub + '</div>'
-            +   '<div class="bc-l2">' + chipsOf(x) + tagsOf(x) + '<span class="bc-tt">' + escapeHtml(x.ticketType || '') + '</span></div>'
-            +   notesOf(x)
+            +   '<div class="bc-l2">' + (x.support ? '<span class="bc-oshi" title="推しキャスト">推し <b>' + escapeHtml(x.support) + '</b></span>' : '') + tagsOf(x) + '<span class="bc-tt">' + escapeHtml(x.ticketType || '') + '</span></div>'
+            +   '<div class="bc-l3">' + (_bdGiftTarget_(x) ? '<span class="bc-gift' + (x.benefit ? ' done' : '') + '" title="特典">🎁 ' + escapeHtml(_bdGiftLabel_(x)) + ' <b>×' + _bdGiftQty_(x) + '</b>' + (x.benefit ? ' 済' : '') + '</span>' : '')
+            +     (x.deskNote ? '<span class="bc-note" title="受付メモ">📝 ' + escapeHtml(x.deskNote) + '</span>' : '')
+            +     (x.memo ? '<span class="bc-memo" title="お客様の備考">備考: ' + escapeHtml(x.memo) + '</span>' : '') + '</div>'
             + '</div>'
             + '<div class="bc-cnt' + (Number(x.count) >= 2 ? ' multi' : '') + '"><b>' + escapeHtml(x.count) + '</b>枚</div>'
             + '<div class="bc-act" onclick="event.stopPropagation();">' + actsOf(x, kind) + '</div>'
