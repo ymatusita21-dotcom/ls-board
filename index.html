@@ -243,6 +243,25 @@
     .bc-l3 .bc-note, .bc-l3 .bc-memo { margin-top: 0; flex-shrink: 1; min-width: 0; }
     .bc-l2 .bc-oshi { font-size: 12px; } .bc-l2 .bc-oshi b { font-size: 14px; }
 
+    /* v7.56: 当日の新規登録 (ボードの外に浮かべる。席表は押せるまま) */
+    .bd-reg-btn { flex-shrink: 0; border: 0; border-radius: 10px; background: #0f172a; color: #fff; font-weight: 800; font-size: 14px; padding: 10px 14px; cursor: pointer; }
+    .bd-seat.bs-empty { cursor: pointer; }
+    .bd-seat.bs-pick { background: #f59e0b !important; border-color: #b45309 !important; color: #fff !important; font-weight: 800; }
+    .bd-reg { position: fixed; left: 16px; bottom: 16px; z-index: 2500; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+      background: #fff; border: 2px solid #0f172a; border-radius: 14px; box-shadow: 0 18px 40px rgba(15,23,42,.28); padding: 12px 14px; font-size: 14px; }
+    .bd-reg-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .bd-reg-hd b { font-size: 16px; } .bd-reg-hd span { color: #475569; font-size: 12px; } .bd-reg-hd .bc-sub { margin-left: auto; }
+    .bd-reg label { display: block; font-size: 12px; color: #475569; margin: 6px 0 0; }
+    .bd-reg input:not([type=checkbox]), .bd-reg select { display: block; width: 100%; box-sizing: border-box; font-size: 15px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 2px; }
+    .bd-reg input[readonly] { background: #f1f5f9; }
+    .bd-reg-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 8px; }
+    .bd-reg-seats { font-size: 13px; color: #0f172a; min-height: 18px; } .bd-reg-seats .bc-seat { margin-right: 4px; } .bd-reg-seats small { color: #64748b; }
+    .bd-reg-pay { display: flex; gap: 6px; margin-top: 8px; }
+    .bd-reg-pay button { flex: 1; border: 1px solid #cbd5e1; background: #fff; border-radius: 8px; padding: 8px 4px; font-weight: 700; cursor: pointer; }
+    .bd-reg-pay button.on { background: #0f172a; border-color: #0f172a; color: #fff; }
+    .bd-reg label.ck { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #0f172a; margin-top: 10px; }
+    .bd-reg-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; } .bd-reg-foot span { flex: 1; } .bd-reg-foot .bc-go { padding: 10px 18px; }
+
   </style>
 </head>
 <body>
@@ -321,6 +340,12 @@
           if (ok) g = g.withSuccessHandler(ok);
           g = g.withFailureHandler((e) => { if (_isAuthErr_(e)) return _showGate_('キーが変わりました。新しいキーを入力してください'); if (ng) ng(e); });
           g.boardUpdate(bpKey, id, updates);
+        },
+        registerWalkIn(id, form) {   // v7.56: 当日の新規登録
+          let g = google.script.run;
+          if (ok) g = g.withSuccessHandler(ok);
+          g = g.withFailureHandler((e) => { if (_isAuthErr_(e)) return _showGate_('キーが変わりました。新しいキーを入力してください'); if (ng) ng(e); });
+          g.boardRegister(bpKey, id, form);
         }
       };
       return r;
@@ -334,6 +359,7 @@
       checkinState.geneItems = (res.geneItems || []).map((x) => Object.assign(x, { _uid: 'ゲネ予約|' + x.receiveNo })); // v6.01
       checkinState.benefitRules = res.benefitRules; // v6.14: 特典の設定 (null = 未設定)
       checkinState.seatGrid = res.seatGrid || null; // v7.38: 席表
+      checkinState.ticketTypes = res.ticketTypes || []; checkinState.castNames = res.castNames || []; // v7.56: 当日の新規登録
       checkinState.items.forEach((x) => { x._orig = {}; CK_SAVE_FIELDS.forEach((f) => { x._orig[f] = String(x[f] == null ? '' : x[f]); }); });
       if (res.title) { document.getElementById('bp-title').textContent = '当日受付ボード — ' + res.title; document.title = '受付ボード ' + res.title; }
     }
@@ -637,6 +663,7 @@
           + stat('要対応', attn.length + '<small>件</small>', attn.length ? 'warn' : '', '未入金・当日精算')
           + stat('受け取る金額', yen(toCollect), toCollect ? 'warn' : '')
           + (giftAll.length ? stat('🎁 特典まだ', giftLeft + '<small>件</small>', giftLeft ? 'gift' : 'ok', '入場したのにまだ渡していない件数') : '')
+          + '<button type="button" class="bd-reg-btn" onclick="boardRegOpen()" title="当日来たお客様を登録します (席表の空いている席を押しても始められます)">＋ 当日登録</button>'
           + '</div>';
 
         const tab = (k, label, n, cls) => '<button type="button" class="' + (boardState.leftTab === k ? 'on ' : '') + (cls || '') + '" onclick="boardState.leftTab=\'' + k + '\'; renderBoard(false);">' + label + (n != null ? ' <b>' + n + '</b>' : '') + '</button>';
@@ -750,7 +777,9 @@
             if (!c || c.type !== 'seat' || !c.seatId) { cells += '<div class="bd-seat bs-gap"></div>'; continue; }
             seatN++;
             const x = bySeat[c.seatId];
-            let cls = 'bs-empty', tip = c.seatId + ' 空席', click = '';
+            const picked = boardState.reg && boardState.reg.seats.indexOf(c.seatId) >= 0;
+            let cls = picked ? 'bs-empty bs-pick' : 'bs-empty', tip = c.seatId + (picked ? ' 登録する席 (押すと外す)' : ' 空席 (押すと当日登録)'),
+              click = ' onclick="boardSeatEmpty(\'' + escapeAttr(c.seatId) + '\')"';
             if (x) {
               cls = x.arrival === '到着' ? 'bs-in' : 'bs-resv';
               if (cls === 'bs-in') arrivedN++; else resvN++;
@@ -780,6 +809,103 @@
         renderBoard(false);
         const el = document.querySelector('#board-panel .bc[data-uid="' + String(uid).replace(/"/g, '\\"') + '"]');
         if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+      /* ---------- v7.56: 当日の新規登録 (席表で席を選ぶ・その場で入場) ----------
+         登録の欄はボードの外 (body の直下) に置く。ボードは2〜3秒ごとに描き直すので、中に置くと入力が消えるため */
+      function _bdRegTypes_() {
+        const src = checkinState.ticketTypes || (typeof state !== 'undefined' && state && state.ticketTypes) || [];
+        return src.map((t) => ({ name: String(t.name || ''), price: Number(t.price) || 0 })).filter((t) => t.name);
+      }
+      function _bdRegCast_() {
+        if (checkinState.castNames) return checkinState.castNames;
+        return ((typeof state !== 'undefined' && state && state.cast) || []).map((c) => c && c.name).filter(Boolean);
+      }
+      function boardSeatEmpty(seatId) {
+        if (!boardState.reg) { boardRegOpen(seatId); return; }
+        const i = boardState.reg.seats.indexOf(seatId);
+        if (i >= 0) boardState.reg.seats.splice(i, 1); else boardState.reg.seats.push(seatId);
+        renderBoard(false);
+        _bdRegSync_();
+      }
+      function boardRegOpen(seatId) {
+        if (!boardState.show) { alert('先に、上で公演の回を選んでください'); return; }
+        if (!boardState.reg) boardState.reg = { seats: [] };
+        if (seatId && boardState.reg.seats.indexOf(seatId) < 0) boardState.reg.seats.push(seatId);
+        let el = document.getElementById('bd-reg');
+        if (!el) {
+          const types = _bdRegTypes_(), cast = _bdRegCast_();
+          const [d, t] = boardState.show.split('|');
+          el = document.createElement('div');
+          el.id = 'bd-reg';
+          el.className = 'bd-reg';
+          el.innerHTML = '<div class="bd-reg-hd"><b>＋ 当日登録</b><span>' + escapeHtml(d + ' ' + t) + ' の回</span><button type="button" class="bc-sub" onclick="boardRegClose()">✕</button></div>'
+            + '<div class="bd-reg-seats" id="bdr-seats"></div>'
+            + '<label>お名前<input id="bdr-name" data-no-autosave autocomplete="off" placeholder="例: 山田 花子"></label>'
+            + '<label>カナ (任意)<input id="bdr-kana" data-no-autosave autocomplete="off" placeholder="ヤマダ ハナコ"></label>'
+            + '<div class="bd-reg-row"><label>券種<select id="bdr-type" data-no-autosave onchange="_bdRegSync_()">' + types.map((x) => '<option value="' + escapeAttr(x.name) + '">' + escapeHtml(x.name) + (x.price ? ' ' + yen(x.price) : '') + '</option>').join('') + '</select></label>'
+            + '<label class="n">枚数<input id="bdr-count" type="number" min="1" max="50" value="1" data-no-autosave oninput="_bdRegSync_()"></label></div>'
+            + '<div class="bd-reg-pay" id="bdr-pay">' + ['現金', 'CSL', '未'].map((p, i) => '<button type="button" data-pay="' + p + '" class="' + (i === 0 ? 'on' : '') + '" onclick="_bdRegPay_(this)">' + (p === '未' ? 'あとで清算' : p === 'CSL' ? 'キャッシュレス' : '現金') + '</button>').join('') + '</div>'
+            + '<label>推し (任意)<select id="bdr-support" data-no-autosave><option value="">なし</option>' + cast.map((n) => '<option value="' + escapeAttr(n) + '">' + escapeHtml(n) + '</option>').join('') + '</select></label>'
+            + '<label>メモ (任意)<input id="bdr-memo" data-no-autosave autocomplete="off"></label>'
+            + '<label class="ck"><input type="checkbox" id="bdr-checkin" checked data-no-autosave> そのまま入場にする</label>'
+            + '<div class="bd-reg-foot"><span id="bdr-total"></span><button type="button" class="bc-go" id="bdr-go" onclick="boardRegSubmit()">登録する</button></div>';
+          document.body.appendChild(el);
+          setTimeout(() => { const n = document.getElementById('bdr-name'); if (n) n.focus(); }, 30);
+        }
+        renderBoard(false);
+        _bdRegSync_();
+      }
+      function boardRegClose() {
+        boardState.reg = null;
+        const el = document.getElementById('bd-reg'); if (el) el.remove();
+        renderBoard(false);
+      }
+      function _bdRegPay_(btn) {
+        document.querySelectorAll('#bdr-pay button').forEach((b) => b.classList.toggle('on', b === btn));
+        _bdRegSync_();
+      }
+      /** 選んだ席・枚数・合計を、欄の中だけ書き換える (入力中の文字は触らない) */
+      function _bdRegSync_() {
+        const r = boardState.reg; if (!r) return;
+        const box = document.getElementById('bdr-seats'); if (!box) return;
+        box.innerHTML = r.seats.length
+          ? '席 ' + r.seats.map((x) => '<span class="bc-seat">' + escapeHtml(x) + '</span>').join('') + ' <small>(席表で押すと外せます)</small>'
+          : (checkinState.seatGrid ? '<small>席表の空いている席を押すと、席を選べます (自由席なら選ばなくて大丈夫です)</small>' : '');
+        const cnt = document.getElementById('bdr-count');
+        if (r.seats.length) { cnt.value = r.seats.length; cnt.readOnly = true; } else cnt.readOnly = false;
+        const type = (document.getElementById('bdr-type') || {}).value || '';
+        const tt = _bdRegTypes_().find((x) => x.name === type);
+        const n = Math.max(1, Number(cnt.value) || 1);
+        const pay = ((document.querySelector('#bdr-pay button.on') || {}).dataset || {}).pay || '現金';
+        document.getElementById('bdr-total').innerHTML = tt && tt.price ? '合計 <b>' + yen(tt.price * n) + '</b>' + (pay === '未' ? ' (あとで清算)' : ' を' + (pay === 'CSL' ? 'キャッシュレス' : '現金') + 'で受け取る') : '';
+      }
+      function boardRegSubmit() {
+        const r = boardState.reg; if (!r) return;
+        const v = (id) => String((document.getElementById(id) || {}).value || '').trim();
+        const name = v('bdr-name');
+        if (!name) { alert('お名前を入れてください'); return; }
+        const [date, time] = boardState.show.split('|');
+        const form = {
+          name: name, kana: v('bdr-kana'), ticketType: v('bdr-type'), count: Number(v('bdr-count')) || 1,
+          support: v('bdr-support'), memo: v('bdr-memo'), seats: r.seats.slice(), date: date, time: time,
+          pay: ((document.querySelector('#bdr-pay button.on') || {}).dataset || {}).pay || '現金',
+          checkin: !!(document.getElementById('bdr-checkin') || {}).checked,
+        };
+        if (!form.ticketType) { alert('券種がありません (チケット設定で券種を登録してください)'); return; }
+        if (!confirm(name + ' 様 ' + form.count + '枚 (' + form.ticketType + ')' + (form.seats.length ? ' 席 ' + form.seats.join(', ') : '') + '\nで登録します。よろしいですか？')) return;
+        const btn = document.getElementById('bdr-go'); if (btn) { btn.disabled = true; btn.textContent = '登録中…'; }
+        _ckRun_()
+          .withSuccessHandler((res) => {
+            toast(name + ' 様を登録しました' + (res && res.receiveNo ? ' (受付番号 ' + res.receiveNo + ')' : '') + (res && res.checkedIn ? '・入場にしました' : ''), 'success');
+            if (res && res.overLimit && res.overLimit.length) alert('⚠ 上限を超えて登録しました: ' + res.overLimit.join(' / '));
+            boardRegClose();
+            try { if (typeof bpLoad === 'function') bpLoad(false); else if (typeof loadCheckin === 'function') loadCheckin(); } catch (e) { }
+          })
+          .withFailureHandler((e) => {
+            if (btn) { btn.disabled = false; btn.textContent = '登録する'; }
+            alert('登録できませんでした。\n' + (e && e.message ? e.message : e));
+          })
+          .registerWalkIn(state.id, form);
       }
       function boardUndo(uid) {
         const x = _bdAll_().find((i) => i._uid === uid);
