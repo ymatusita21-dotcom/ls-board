@@ -171,6 +171,17 @@
     .bd-gtally th:nth-child(-n+2), .bd-gtally td:nth-child(-n+2) { text-align: left; }
     .bd-gtally th { font-size: 11px; color: var(--bd-sub); font-weight: 700; }
     .bd-gtally tr.now td { background: #fffbeb; }
+    /* v7.63: 特典の準備 — 特典の種類ごとの区切り */
+    .bd-gtally .gt-gift { margin-top: 8px; border-top: 1px dashed #fde68a; padding-top: 6px; }
+    .bd-gtally .gt-ghd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+    .bd-gtally .gt-ghd > b { flex: 1 1 100%; color: #78350f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bd-gtally .gt-pill { font-size: 12px; background: #f1f5f9; border-radius: 999px; padding: 1px 8px; color: #334155; }
+    .bd-gtally .gt-pill.left { background: #fef3c7; color: #92400e; }
+    .bd-gtally .gt-pill.ok { background: #dcfce7; color: #166534; }
+    .bd-gtally .gt-miss { font-size: 11px; color: #b45309; font-weight: 800; white-space: nowrap; }
+    .bd-gtally .gt-ok { color: #16a34a; font-weight: 800; }
+    .bd-gtally th:first-child, .bd-gtally td:first-child { text-align: left; }
+    .bd-gtally th:nth-child(2), .bd-gtally td:nth-child(2) { text-align: right; }
 
     /* ---- 狭い画面: 上に選んだ人と席表、下に一覧 (席表は常に見える高さに) ---- */
     @container (max-width: 860px) {
@@ -596,25 +607,39 @@
             return '<div class="bd-grp">' + escapeHtml(c) + ' <span>' + g.length + '件 / ' + sum(g) + '枚</span></div>' + g.map((x) => card(x, kind)).join('');
           }).join('');
         };
-        // v6.14: 推しキャスト別の集計 (この回)。特典の種類ごとに 必要な個数 / 渡した / まだ
+        // v7.63: 特典の準備 (この回)。特典の種類ごとに区切り、その下にキャストごとの 用意する / 来場済 / 渡した / 残り
         const giftTally = () => {
-          const by = {};
+          const byGift = {};
           giftAll.forEach((x) => {
+            const label = _bdGiftLabel_(x);
             const cast = String(x.support || '').trim() || '(推しなし)';
-            const key = cast + '|' + _bdGiftLabel_(x);
-            const t = by[key] = by[key] || { cast: cast, label: _bdGiftLabel_(x), need: 0, came: 0, done: 0 };
+            const g = byGift[label] = byGift[label] || { label: label, need: 0, came: 0, done: 0, casts: {} };
+            const t = g.casts[cast] = g.casts[cast] || { cast: cast, need: 0, came: 0, done: 0 };
             const qn = _bdGiftQty_(x);
-            t.need += qn;
-            if (x.arrival === '到着') t.came += qn;
-            if (x.benefit) t.done += qn;
+            t.need += qn; g.need += qn;
+            if (x.arrival === '到着') { t.came += qn; g.came += qn; }
+            if (x.benefit) { t.done += qn; g.done += qn; }
           });
-          const rows = Object.keys(by).map((k) => by[k]).sort((a, b) => (a.cast[0] === '(') - (b.cast[0] === '(') || a.cast.localeCompare(b.cast, 'ja'));
-          const tot = rows.reduce((s, r) => ({ need: s.need + r.need, done: s.done + r.done }), { need: 0, done: 0 });
-          const open = !!boardState.tallyOpen;
-          return '<div class="bd-gtally"><div class="hd" onclick="boardState.tallyOpen=' + (open ? 'false' : 'true') + '; renderBoard(false);">' + (open ? '▼' : '▶') + ' 推しキャスト別の集計 (この回) <span>必要 ' + tot.need + '個 / 渡した ' + tot.done + '個 / まだ ' + (tot.need - tot.done) + '個</span></div>'
-            + (open ? '<table><thead><tr><th>推しキャスト</th><th>特典</th><th>必要</th><th>来場済</th><th>渡した</th><th>まだ</th></tr></thead><tbody>'
-              + rows.map((r) => '<tr' + (r.came > r.done ? ' class="now"' : '') + '><td>' + escapeHtml(r.cast) + '</td><td>' + escapeHtml(r.label) + '</td><td>' + r.need + '</td><td>' + r.came + '</td><td>' + r.done + '</td><td>' + (r.need - r.done) + '</td></tr>').join('')
-              + '</tbody></table>' : '') + '</div>';
+          const gifts = Object.keys(byGift).map((k) => byGift[k]).sort((a, b) => a.label.localeCompare(b.label, 'ja'));
+          const tot = gifts.reduce((s, g) => ({ need: s.need + g.need, done: s.done + g.done, miss: s.miss + Math.max(0, g.came - g.done) }), { need: 0, done: 0, miss: 0 });
+          const open = boardState.tallyOpen !== false;
+          let body = '';
+          if (open) {
+            body = gifts.map((g) => {
+              const casts = Object.keys(g.casts).map((k) => g.casts[k]).sort((a, b) => (a.cast[0] === '(') - (b.cast[0] === '(') || a.cast.localeCompare(b.cast, 'ja'));
+              return '<div class="gt-gift"><div class="gt-ghd"><b>🎁 ' + escapeHtml(g.label) + '</b>'
+                + '<span class="gt-pill">用意する <b>' + g.need + '</b></span><span class="gt-pill">渡した <b>' + g.done + '</b></span><span class="gt-pill ' + (g.need - g.done ? 'left' : 'ok') + '">残り <b>' + (g.need - g.done) + '</b></span></div>'
+                + '<table><thead><tr><th>推しキャスト</th><th>用意する</th><th>来場済</th><th>渡した</th><th>残り</th></tr></thead><tbody>'
+                + casts.map((r) => {
+                  const miss = Math.max(0, r.came - r.done);
+                  return '<tr' + (miss ? ' class="now"' : '') + '><td>' + escapeHtml(r.cast) + (miss ? ' <span class="gt-miss">⚠ 渡しそびれ ' + miss + '</span>' : '') + '</td><td><b>' + r.need + '</b></td><td>' + r.came + '</td><td>' + r.done + '</td><td>' + (r.need - r.done ? (r.need - r.done) : '<span class="gt-ok">✓</span>') + '</td></tr>';
+                }).join('')
+                + '</tbody></table></div>';
+            }).join('') || '<div class="hint">この回の特典の対象はありません</div>';
+          }
+          return '<div class="bd-gtally"><div class="hd" onclick="boardState.tallyOpen=' + (open ? 'false' : 'true') + '; renderBoard(false);">' + (open ? '▼' : '▶') + ' 特典の準備 (この回)'
+            + ' <span>用意する ' + tot.need + '個 / 渡した ' + tot.done + '個 / 残り ' + (tot.need - tot.done) + '個' + (tot.miss ? ' / <em style="color:#b45309; font-style:normal; font-weight:800;">⚠ 渡しそびれ ' + tot.miss + '個</em>' : '') + '</span></div>'
+            + body + '</div>';
         };
         const giftList = () => {
           const rank = (x) => (x.arrival === '到着' && !x.benefit ? 0 : (x.arrival !== '到着' ? 1 : 2));
