@@ -357,6 +357,12 @@
           if (ok) g = g.withSuccessHandler(ok);
           g = g.withFailureHandler((e) => { if (_isAuthErr_(e)) return _showGate_('キーが変わりました。新しいキーを入力してください'); if (ng) ng(e); });
           g.boardRegister(bpKey, id, form);
+        },
+        setBoardSeats(id, u) {   // v7.64: 予約に席を付ける
+          let g = google.script.run;
+          if (ok) g = g.withSuccessHandler(ok);
+          g = g.withFailureHandler((e) => { if (_isAuthErr_(e)) return _showGate_('キーが変わりました。新しいキーを入力してください'); if (ng) ng(e); });
+          g.boardSetSeats(bpKey, id, u);
         }
       };
       return r;
@@ -654,7 +660,9 @@
             + '<div class="bd-sel-main"><div class="bc-l1"><span class="bc-name">' + escapeHtml(focus.name || '') + '</span><span class="bc-kana">' + escapeHtml(focus.kana || '') + '</span>'
             + '<span class="bc-time">' + (focus.arrival === '到着' ? '入場済み ' + escapeHtml(String(focus.checkinAt || '').slice(11, 16)) : 'まだ来ていない') + ' · ' + escapeHtml(focus.count) + '枚</span></div>'
             + '<div class="bc-l2">' + seatOf(focus) + chipsOf(focus) + tagsOf(focus) + '<span class="bc-tt">' + escapeHtml(focus.ticketType || '') + '</span></div>' + notesOf(focus) + '</div>'
-            + '<div class="bc-act">' + actsOf(focus, kind) + '<button type="button" class="bc-sub" onclick="boardFocus(\'\')">✕ 閉じる</button></div>'
+            + '<div class="bc-act">' + actsOf(focus, kind)
+            + (checkinState.seatGrid && focus.sheet !== 'ゲネ予約' ? '<button type="button" class="bc-sub" onclick="boardSeatForOpen(\'' + escapeAttr(focus._uid) + '\')" title="席表で席を選んで、この予約の席番にします">💺 ' + (focus.seats ? '席を変える' : '席を決める') + '</button>' : '')
+            + '<button type="button" class="bc-sub" onclick="boardFocus(\'\')">✕ 閉じる</button></div>'
             + '</div>';
         };
         // 最近の入場 (折りたたみ。はじめは閉じる)
@@ -801,9 +809,11 @@
             const c = at[r + ':' + col];
             if (!c || c.type !== 'seat' || !c.seatId) { cells += '<div class="bd-seat bs-gap"></div>'; continue; }
             seatN++;
-            const x = bySeat[c.seatId];
-            const picked = boardState.reg && boardState.reg.seats.indexOf(c.seatId) >= 0;
-            let cls = picked ? 'bs-empty bs-pick' : 'bs-empty', tip = c.seatId + (picked ? ' 登録する席 (押すと外す)' : ' 空席 (押すと当日登録)'),
+            const sf = boardState.seatFor;
+            const x0 = bySeat[c.seatId];
+            const x = sf && x0 && x0._uid === sf.uid ? null : x0;   // v7.64: 席を決めている人の今の席は、選び直せるように空き扱い
+            const picked = sf ? sf.seats.indexOf(c.seatId) >= 0 : (boardState.reg && boardState.reg.seats.indexOf(c.seatId) >= 0);
+            let cls = picked ? 'bs-empty bs-pick' : 'bs-empty', tip = c.seatId + (picked ? (sf ? ' この人の席 (押すと外す)' : ' 登録する席 (押すと外す)') : (sf ? ' 空席 (押すとこの人の席にする)' : ' 空席 (押すと当日登録)')),
               click = ' onclick="boardSeatEmpty(\'' + escapeAttr(c.seatId) + '\')"';
             if (x) {
               cls = x.arrival === '到着' ? 'bs-in' : 'bs-resv';
@@ -839,13 +849,21 @@
          登録の欄はボードの外 (body の直下) に置く。ボードは2〜3秒ごとに描き直すので、中に置くと入力が消えるため */
       function _bdRegTypes_() {
         const src = checkinState.ticketTypes || (typeof state !== 'undefined' && state && state.ticketTypes) || [];
-        return src.map((t) => ({ name: String(t.name || ''), price: Number(t.price) || 0 })).filter((t) => t.name);
+        return src.map((t) => ({ name: String(t.name || ''), price: Number(t.price) || 0, invite: !!t.invite })).filter((t) => t.name);
       }
       function _bdRegCast_() {
         if (checkinState.castNames) return checkinState.castNames;
         return ((typeof state !== 'undefined' && state && state.cast) || []).map((c) => c && c.name).filter(Boolean);
       }
       function boardSeatEmpty(seatId) {
+        // v7.64: 予約に席を付けている時は、その人の席を足す/外す
+        if (boardState.seatFor) {
+          const sf = boardState.seatFor, i = sf.seats.indexOf(seatId);
+          if (i >= 0) sf.seats.splice(i, 1);
+          else { if (sf.count && sf.seats.length >= sf.count) { toast(sf.count + '席まで選べます。外してから選んでください', 'error'); return; } sf.seats.push(seatId); }
+          renderBoard(false); _bdSeatForSync_();
+          return;
+        }
         if (!boardState.reg) { boardRegOpen(seatId); return; }
         const i = boardState.reg.seats.indexOf(seatId);
         if (i >= 0) boardState.reg.seats.splice(i, 1); else boardState.reg.seats.push(seatId);
@@ -854,6 +872,7 @@
       }
       function boardRegOpen(seatId) {
         if (!boardState.show) { alert('先に、上で公演の回を選んでください'); return; }
+        if (boardState.seatFor) boardSeatForClose();   // v7.64
         if (!boardState.reg) boardState.reg = { seats: [] };
         if (seatId && boardState.reg.seats.indexOf(seatId) < 0) boardState.reg.seats.push(seatId);
         let el = document.getElementById('bd-reg');
@@ -869,7 +888,7 @@
             + '<label>カナ (任意)<input id="bdr-kana" data-no-autosave autocomplete="off" placeholder="ヤマダ ハナコ"></label>'
             + '<div class="bd-reg-row"><label>券種<select id="bdr-type" data-no-autosave onchange="_bdRegSync_()">' + types.map((x) => '<option value="' + escapeAttr(x.name) + '">' + escapeHtml(x.name) + (x.price ? ' ' + yen(x.price) : '') + '</option>').join('') + '</select></label>'
             + '<label class="n">枚数<input id="bdr-count" type="number" min="1" max="50" value="1" data-no-autosave oninput="_bdRegSync_()"></label></div>'
-            + '<div class="bd-reg-pay" id="bdr-pay">' + ['現金', 'CSL', '未'].map((p, i) => '<button type="button" data-pay="' + p + '" class="' + (i === 0 ? 'on' : '') + '" onclick="_bdRegPay_(this)">' + (p === '未' ? 'あとで清算' : p === 'CSL' ? 'キャッシュレス' : '現金') + '</button>').join('') + '</div>'
+            + '<div class="bd-reg-pay" id="bdr-pay">' + ['現金', 'CSL', '未', '招待'].map((p, i) => '<button type="button" data-pay="' + p + '" class="' + (i === 0 ? 'on' : '') + '" onclick="_bdRegPay_(this)">' + (p === '未' ? 'あとで清算' : p === 'CSL' ? 'キャッシュレス' : p === '招待' ? '🎟 招待 (0円)' : '現金') + '</button>').join('') + '</div>'
             + '<label>推し (任意)<select id="bdr-support" data-no-autosave><option value="">なし</option>' + cast.map((n) => '<option value="' + escapeAttr(n) + '">' + escapeHtml(n) + '</option>').join('') + '</select></label>'
             + '<label>メモ (任意)<input id="bdr-memo" data-no-autosave autocomplete="off"></label>'
             + '<label class="ck"><input type="checkbox" id="bdr-checkin" checked data-no-autosave> そのまま入場にする</label>'
@@ -879,6 +898,47 @@
         }
         renderBoard(false);
         _bdRegSync_();
+      }
+      /* ---------- v7.64: 予約に席を付ける (席番の登録・変更) ---------- */
+      function boardSeatForOpen(uid) {
+        const x = _bdAll_().find((i) => i._uid === uid); if (!x) return;
+        if (boardState.reg) boardRegClose();
+        const cur = String(x.seats || '').split(/[,、\s]+/).map((v) => v.trim()).filter(Boolean);
+        boardState.seatFor = { uid: uid, seats: cur, count: Number(x.count) || 0 };
+        let el = document.getElementById('bd-seatfor');
+        if (!el) { el = document.createElement('div'); el.id = 'bd-seatfor'; el.className = 'bd-reg'; document.body.appendChild(el); }
+        el.innerHTML = '<div class="bd-reg-hd"><b>💺 席を決める</b><span>' + escapeHtml((x.name || '') + ' 様 ' + (x.count || '') + '枚') + '</span><button type="button" class="bc-sub" onclick="boardSeatForClose()">✕</button></div>'
+          + '<div class="bd-reg-seats" id="bdsf-seats"></div>'
+          + '<div class="hint" style="font-size:12px;">席表の空いている席を押して選びます。もう一度押すと外せます。</div>'
+          + '<div class="bd-reg-foot"><button type="button" class="bc-sub" onclick="boardSeatForClear()">席を外す (自由席)</button><button type="button" class="bc-go" id="bdsf-go" onclick="boardSeatForSave()">この席にする</button></div>';
+        renderBoard(false); _bdSeatForSync_();
+      }
+      function _bdSeatForSync_() {
+        const sf = boardState.seatFor, box = document.getElementById('bdsf-seats'); if (!sf || !box) return;
+        box.innerHTML = sf.seats.length ? '席 ' + sf.seats.map((v) => '<span class="bc-seat">' + escapeHtml(v) + '</span>').join('') + ' <small>(' + sf.seats.length + '/' + (sf.count || '?') + '席)</small>' : '<small>まだ席を選んでいません</small>';
+      }
+      function boardSeatForClose() {
+        boardState.seatFor = null;
+        const el = document.getElementById('bd-seatfor'); if (el) el.remove();
+        renderBoard(false);
+      }
+      function boardSeatForClear() { if (!boardState.seatFor) return; boardState.seatFor.seats = []; _bdSeatForSync_(); boardSeatForSave(); }
+      function boardSeatForSave() {
+        const sf = boardState.seatFor; if (!sf) return;
+        const x = _bdAll_().find((i) => i._uid === sf.uid); if (!x) { boardSeatForClose(); return; }
+        if (sf.seats.length && sf.count && sf.seats.length !== sf.count) { alert('席を枚数分 (' + sf.count + '席) 選んでください (今 ' + sf.seats.length + '席)'); return; }
+        if (!confirm((x.name || '') + ' 様の席を ' + (sf.seats.length ? sf.seats.join(', ') : '「なし (自由席)」') + ' にします。よろしいですか？')) return;
+        const btn = document.getElementById('bdsf-go'); if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+        const seats = sf.seats.slice();
+        _ckRun_()
+          .withSuccessHandler(() => {
+            x.seats = seats.join(',');
+            toast((x.name || '') + ' 様の席を ' + (seats.length ? seats.join(', ') : 'なし') + ' にしました', 'success');
+            boardSeatForClose();
+            try { if (typeof bpLoad === 'function') bpLoad(false); else if (typeof loadCheckin === 'function') loadCheckin(); } catch (e) { }
+          })
+          .withFailureHandler((e) => { if (btn) { btn.disabled = false; btn.textContent = 'この席にする'; } alert('保存できませんでした。\n' + (e && e.message ? e.message : e)); })
+          .setBoardSeats(state.id, { sheet: x.sheet, rowIndex: x.rowIndex, receiveNo: x.receiveNo, date: x.date, time: x.time, count: Number(x.count) || 0, seats: seats });
       }
       function boardRegClose() {
         boardState.reg = null;
@@ -895,13 +955,17 @@
         const box = document.getElementById('bdr-seats'); if (!box) return;
         box.innerHTML = r.seats.length
           ? '席 ' + r.seats.map((x) => '<span class="bc-seat">' + escapeHtml(x) + '</span>').join('') + ' <small>(席表で押すと外せます)</small>'
-          : (checkinState.seatGrid ? '<small>席表の空いている席を押すと、席を選べます (自由席なら選ばなくて大丈夫です)</small>' : '');
+          : (checkinState.seatGrid ? '<span class="bc-seat" style="background:#f1f5f9;color:#475569;">自由席 (席なし)</span> <small>席を付ける時は、席表の空いている席を押してください</small>' : '<span class="bc-seat" style="background:#f1f5f9;color:#475569;">自由席 (席なし)</span>');
         const cnt = document.getElementById('bdr-count');
         if (r.seats.length) { cnt.value = r.seats.length; cnt.readOnly = true; } else cnt.readOnly = false;
         const type = (document.getElementById('bdr-type') || {}).value || '';
         const tt = _bdRegTypes_().find((x) => x.name === type);
         const n = Math.max(1, Number(cnt.value) || 1);
+        // v7.64: 招待用の券種を選んだら「招待」に。招待なら 0円
+        if (tt && tt.invite && r._lastType !== type) { const ib = document.querySelector('#bdr-pay button[data-pay="招待"]'); if (ib) document.querySelectorAll('#bdr-pay button').forEach((b) => b.classList.toggle('on', b === ib)); }
+        r._lastType = type;
         const pay = ((document.querySelector('#bdr-pay button.on') || {}).dataset || {}).pay || '現金';
+        if (pay === '招待') { document.getElementById('bdr-total').innerHTML = '招待 <b>0円</b> (売上に入りません)'; return; }
         document.getElementById('bdr-total').innerHTML = tt && tt.price ? '合計 <b>' + yen(tt.price * n) + '</b>' + (pay === '未' ? ' (あとで清算)' : ' を' + (pay === 'CSL' ? 'キャッシュレス' : '現金') + 'で受け取る') : '';
       }
       function boardRegSubmit() {
